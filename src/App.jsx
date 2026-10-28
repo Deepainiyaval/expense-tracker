@@ -989,93 +989,382 @@ function EmptyState({ text }) {
 /* ============================================================
    TRANSACTIONS / INCOME / EXPENSES
    ============================================================ */
-function TransactionsView({ filterType, transactions, catColor, catIcon, incomeCategories, expenseCategories, onAdd, onEdit, onDelete }) {
+
+function TransactionsView({
+  filterType,
+  transactions,
+  catColor,
+  catIcon,
+  incomeCategories,
+  expenseCategories,
+  onAdd,
+  onEdit,
+  onDelete,
+}) {
   const [search, setSearch] = useState("");
   const [month, setMonth] = useState("all");
-  const [category, setCategory] = useState("all");
-  const [typeFilter, setTypeFilter] = useState(filterType);
+  const [selectedDate, setSelectedDate] = useState("");
+  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [selectedTypes, setSelectedTypes] = useState([
+    "income",
+    "expense",
+  ]);
 
-  useEffect(() => setTypeFilter(filterType), [filterType]);
+  useEffect(() => {
+    setSelectedTypes(
+      filterType === "all" ? ["income", "expense"] : [filterType]
+    );
+  }, [filterType]);
 
   const months = useMemo(() => {
-    const set = new Set(transactions.map((t) => monthKey(new Date(t.date))));
-    return Array.from(set).sort().reverse();
+    const monthSet = new Set(
+      transactions.map((t) => monthKey(new Date(t.date + "T00:00:00")))
+    );
+
+    return Array.from(monthSet).sort().reverse();
   }, [transactions]);
 
-  const cats = typeFilter === "income" ? incomeCategories : typeFilter === "expense" ? expenseCategories : [...incomeCategories, ...expenseCategories];
+  const cats =
+    filterType === "income"
+      ? incomeCategories
+      : filterType === "expense"
+      ? expenseCategories
+      : [...incomeCategories, ...expenseCategories];
 
-  const filtered = transactions.filter((t) => {
-    if (typeFilter !== "all" && t.type !== typeFilter) return false;
-    if (month !== "all" && monthKey(new Date(t.date)) !== month) return false;
-    if (category !== "all" && t.category !== category) return false;
-    if (search && !(t.category.toLowerCase().includes(search.toLowerCase()) || (t.notes || "").toLowerCase().includes(search.toLowerCase()))) return false;
-    return true;
-  }).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const filtered = useMemo(() => {
+    return transactions
+      .filter((t) => {
+        // Income / expense filter
+        if (!selectedTypes.includes(t.type)) return false;
 
-  const total = filtered.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
+        // Month filter
+        if (
+          month !== "all" &&
+          monthKey(new Date(t.date + "T00:00:00")) !== month
+        ) {
+          return false;
+        }
+
+        // Exact calendar date filter
+        if (selectedDate && t.date !== selectedDate) {
+          return false;
+        }
+
+        // Multiple category filter
+        if (
+          selectedCategories.length > 0 &&
+          !selectedCategories.includes(t.category)
+        ) {
+          return false;
+        }
+
+        // Search category or notes
+        const query = search.trim().toLowerCase();
+
+        if (
+          query &&
+          !(
+            (t.category || "").toLowerCase().includes(query) ||
+            (t.notes || "").toLowerCase().includes(query)
+          )
+        ) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [
+    transactions,
+    selectedTypes,
+    month,
+    selectedDate,
+    selectedCategories,
+    search,
+  ]);
+
+  const total = filtered.reduce(
+    (sum, t) =>
+      sum + (t.type === "income" ? Number(t.amount) : -Number(t.amount)),
+    0
+  );
+
   const catBreakdown = useMemo(() => {
     const map = {};
-    filtered.forEach((t) => map[t.category] = (map[t.category] || 0) + t.amount);
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+
+    filtered.forEach((t) => {
+      map[t.category] =
+        (map[t.category] || 0) + Number(t.amount);
+    });
+
+    return Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  const heading = filterType === "income" ? "Income" : filterType === "expense" ? "Expenses" : "All transactions";
+  const heading =
+    filterType === "income"
+      ? "Income"
+      : filterType === "expense"
+      ? "Expenses"
+      : "All transactions";
+
+  function toggleCategory(categoryName) {
+    setSelectedCategories((previous) =>
+      previous.includes(categoryName)
+        ? previous.filter((name) => name !== categoryName)
+        : [...previous, categoryName]
+    );
+  }
+
+  function toggleType(type) {
+    if (filterType !== "all") return;
+
+    setSelectedTypes((previous) =>
+      previous.includes(type)
+        ? previous.filter((item) => item !== type)
+        : [...previous, type]
+    );
+  }
+
+  function exportFilteredTransactions() {
+    if (filtered.length === 0) {
+      alert("No transactions match the selected filters.");
+      return;
+    }
+
+    const exportRows = filtered.map((t) => ({
+      Date: t.date,
+      Type: t.type,
+      Category: t.category,
+      Amount: Number(t.amount),
+      Notes: t.notes || "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      worksheet,
+      "Transactions"
+    );
+
+    const fileDate = selectedDate || month || "all";
+    XLSX.writeFile(
+      workbook,
+      `Bahi_Transactions_${fileDate}.xlsx`
+    );
+  }
 
   return (
     <div className="stack-lg">
       <div className="page-head">
-        <div><h2 className="page-title">{heading}</h2><p className="page-sub">{filtered.length} entries</p></div>
+        <div>
+          <h2 className="page-title">{heading}</h2>
+          <p className="page-sub">{filtered.length} entries</p>
+        </div>
+
         <div className="head-actions">
-          {filterType !== "expense" && <button className="btn-secondary" onClick={() => onAdd("income")}><ArrowUpCircle size={15} /> Add income</button>}
-          {filterType !== "income" && <button className="btn-primary" onClick={() => onAdd("expense")}><Plus size={15} /> Add expense</button>}
+          <button
+            className="btn-secondary"
+            onClick={exportFilteredTransactions}
+          >
+            <Download size={15} />
+            Export Excel
+          </button>
+
+          {filterType !== "expense" && (
+            <button
+              className="btn-secondary"
+              onClick={() => onAdd("income")}
+            >
+              <ArrowUpCircle size={15} />
+              Add income
+            </button>
+          )}
+
+          {filterType !== "income" && (
+            <button
+              className="btn-primary"
+              onClick={() => onAdd("expense")}
+            >
+              <Plus size={15} />
+              Add expense
+            </button>
+          )}
         </div>
       </div>
 
       <div className="filter-bar">
-        <div className="input-wrap search"><Search size={15} /><input placeholder="Search category or notes…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
-        <select value={month} onChange={(e) => setMonth(e.target.value)}>
+        <div className="input-wrap search">
+          <Search size={15} />
+          <input
+            placeholder="Search category or notes..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
+        <select
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+        >
           <option value="all">All months</option>
-          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          {months.map((m) => (
+            <option key={m} value={m}>
+              {monthLabel(m)}
+            </option>
+          ))}
         </select>
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
-          <option value="all">All categories</option>
-          {cats.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
-        </select>
+
+        <label className="date-filter">
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+          />
+        </label>
+
+        <details className="multi-filter">
+          <summary>
+            Categories
+            {selectedCategories.length > 0
+              ? ` (${selectedCategories.length} selected)`
+              : " (All)"}
+          </summary>
+
+          <div className="multi-filter-options">
+            <button
+              type="button"
+              className="link"
+              onClick={() => setSelectedCategories([])}
+            >
+              Clear categories
+            </button>
+
+            {cats.map((c) => (
+              <label key={c.name}>
+                <input
+                  type="checkbox"
+                  checked={selectedCategories.includes(c.name)}
+                  onChange={() => toggleCategory(c.name)}
+                />
+                {c.name}
+              </label>
+            ))}
+          </div>
+        </details>
+
         {filterType === "all" && (
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-            <option value="all">Income & expense</option>
-            <option value="income">Income only</option>
-            <option value="expense">Expense only</option>
-          </select>
+          <div className="type-filter-options">
+            <label>
+              <input
+                type="checkbox"
+                checked={selectedTypes.includes("income")}
+                onChange={() => toggleType("income")}
+              />
+              Income
+            </label>
+
+            <label>
+              <input
+                type="checkbox"
+                checked={selectedTypes.includes("expense")}
+                onChange={() => toggleType("expense")}
+              />
+              Expense
+            </label>
+          </div>
         )}
+
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            setSearch("");
+            setMonth("all");
+            setSelectedDate("");
+            setSelectedCategories([]);
+            setSelectedTypes(
+              filterType === "all" ? ["income", "expense"] : [filterType]
+            );
+          }}
+        >
+          Clear filters
+        </button>
       </div>
 
       <div className="grid-two align-start">
         <div className="panel">
-          <div className="panel-head row-between"><h3>Entries</h3><span className={`net tone-${total >= 0 ? "forest" : "rust"}`}>Net {fmtINR(total)}</span></div>
+          <div className="panel-head row-between">
+            <h3>Entries</h3>
+            <span
+              className={`net tone-${total >= 0 ? "forest" : "rust"}`}
+            >
+              Net {fmtINR(total)}
+            </span>
+          </div>
+
           <div className="ledger-list">
-            {filtered.map((t) => <LedgerRow key={t.id} t={t} catColor={catColor} catIcon={catIcon} onEdit={onEdit} onDelete={onDelete} />)}
-            {filtered.length === 0 && <EmptyState text="No entries match these filters." />}
+            {filtered.map((t) => (
+              <LedgerRow
+                key={t.id}
+                t={t}
+                catColor={catColor}
+                catIcon={catIcon}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
+            ))}
+
+            {filtered.length === 0 && (
+              <EmptyState text="No entries match these filters." />
+            )}
           </div>
         </div>
+
         <div className="panel">
-          <div className="panel-head"><h3>By category</h3></div>
-          {catBreakdown.length === 0 ? <EmptyState text="Nothing to break down yet." /> : (
+          <div className="panel-head">
+            <h3>By category</h3>
+          </div>
+
+          {catBreakdown.length === 0 ? (
+            <EmptyState text="Nothing to break down yet." />
+          ) : (
             <ResponsiveContainer width="100%" height={260}>
               <PieChart>
-                <Pie data={catBreakdown} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-                  {catBreakdown.map((c, i) => <Cell key={i} fill={catColor(c.name)} />)}
+                <Pie
+                  data={catBreakdown}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={55}
+                  outerRadius={90}
+                  paddingAngle={2}
+                >
+                  {catBreakdown.map((c, i) => (
+                    <Cell
+                      key={i}
+                      fill={catColor(c.name)}
+                    />
+                  ))}
                 </Pie>
                 <Tooltip content={<ChartTooltip />} />
               </PieChart>
             </ResponsiveContainer>
           )}
+
           <div className="legend-list">
             {catBreakdown.slice(0, 8).map((c) => (
               <div key={c.name} className="legend-item">
-                <span className="dot" style={{ background: catColor(c.name) }} />
+                <span
+                  className="dot"
+                  style={{ background: catColor(c.name) }}
+                />
                 <span className="legend-name">{c.name}</span>
-                <span className="legend-value mono">{fmtINR(c.value)}</span>
+                <span className="legend-value mono">
+                  {fmtINR(c.value)}
+                </span>
               </div>
             ))}
           </div>
@@ -1084,6 +1373,7 @@ function TransactionsView({ filterType, transactions, catColor, catIcon, incomeC
     </div>
   );
 }
+
 
 /* ============================================================
    BUDGETS
@@ -1621,7 +1911,100 @@ input:focus, select:focus, textarea:focus { border-color: var(--forest); }
 .insight-row.tone-positive { color: var(--forest); } .insight-row.tone-positive svg { color: var(--forest); }
 .insight-row.tone-warning { color: var(--rust); } .insight-row.tone-warning svg { color: var(--rust); }
 .insight-row.tone-info { color: var(--ink); } .insight-row.tone-info svg { color: var(--brass); }
+/* Date filter */
+.date-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 170px;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
 
+
+.date-filter input {
+width: 100%;
+min-height: 38px;
+padding: 8px 10px;
+border: 1px solid var(--border);
+border-radius: 8px;
+background: var(--surface);
+color: var(--ink);
+font: inherit;
+font-size: 13px;
+}
+
+/* Multi-select category dropdown */
+.multi-filter {
+position: relative;
+min-width: 155px;
+color: var(--ink);
+font-size: 13px;
+}
+
+.multi-filter summary {
+cursor: pointer;
+list-style: none;
+padding: 10px 12px;
+border: 1px solid var(--border);
+border-radius: 8px;
+background: var(--surface);
+}
+
+.multi-filter summary::-webkit-details-marker {
+display: none;
+}
+
+.multi-filter-options {
+position: absolute;
+z-index: 20;
+top: calc(100% + 5px);
+left: 0;
+width: 210px;
+max-height: 260px;
+overflow-y: auto;
+padding: 12px;
+border: 1px solid var(--border);
+border-radius: 10px;
+background: var(--surface);
+color: var(--ink);
+box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.multi-filter-options label,
+.type-filter-options label {
+display: flex;
+align-items: center;
+gap: 8px;
+padding: 7px 2px;
+cursor: pointer;
+}
+
+.multi-filter-options input,
+.type-filter-options input {
+accent-color: var(--forest);
+}
+
+/* Income / Expense checkboxes */
+.type-filter-options {
+display: flex;
+flex-wrap: wrap;
+gap: 10px;
+align-items: center;
+font-size: 12px;
+color: var(--ink);
+}
+
+@media (max-width: 650px) {
+.date-filter,
+.multi-filter {
+min-width: 100%;
+}
+
+.type-filter-options {
+width: 100%;
+}
+}
 /* ledger rows */
 .ledger-list { display: flex; flex-direction: column; }
 .ledger-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px dashed var(--border); }
